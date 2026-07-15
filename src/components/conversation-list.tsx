@@ -33,7 +33,7 @@ export default function ConversationList({ onSelect, selectedId }: Props) {
     if (!selectedId || !conversations) return;
 
     const selectedConversation = conversations.find(
-      (c) => c._id === selectedId,
+      (c) => c?._id === selectedId,
     );
 
     if (!selectedConversation) return;

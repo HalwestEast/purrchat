@@ -640,23 +640,26 @@ function BubbleAction({
 }) {
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={onClick}
-          aria-label={label}
-          className={cn(
-            "size-7 rounded-full text-stone-500",
-            danger
-              ? "hover:bg-red-50 hover:text-red-600"
-              : "hover:bg-stone-100 hover:text-stone-700",
-          )}
-        >
-          {children}
-        </Button>
-      </TooltipTrigger>
+      <TooltipTrigger
+        render={(props) => (
+          <Button
+            {...props}
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onClick}
+            aria-label={label}
+            className={cn(
+              "size-7 rounded-full text-stone-500",
+              danger
+                ? "hover:bg-red-50 hover:text-red-600"
+                : "hover:bg-stone-100 hover:text-stone-700",
+            )}
+          >
+            {children}
+          </Button>
+        )}
+      />
       <TooltipContent side="top">{label}</TooltipContent>
     </Tooltip>
   );
@@ -1032,7 +1035,7 @@ function ConversationPanel({
   }
 
   return (
-    <TooltipProvider delayDuration={200}>
+    <TooltipProvider>
       <div className="relative flex flex-col flex-1 h-full min-h-0 overflow-hidden">
         <div className="absolute inset-0 z-0 opacity-[0.04] bg-[url('/doodles.svg')] bg-repeat pointer-events-none" />
 

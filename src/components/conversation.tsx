@@ -11,12 +11,7 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { AnimatePresence, motion } from "motion/react";
 
 import { Button } from "@/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+
 import { cn } from "@/lib/utils";
 
 dayjs.extend(relativeTime);
@@ -422,14 +417,14 @@ function ChatBubble({
       {hasActions && (
         <div
           className={cn(
-            "absolute top-full z-20 flex pt-2",
+            "absolute top-full z-50 flex -my-4 py-4 px-2",
             "opacity-0 pointer-events-none transition-opacity duration-150",
             "group-hover/msg:opacity-100 group-hover/msg:pointer-events-auto",
             "focus-within:opacity-100 focus-within:pointer-events-auto",
             bubbleSide === "sent" ? "right-1" : "left-1",
           )}
         >
-          <div className="flex translate-y-1 items-center gap-0.5 rounded-full border border-stone-200 bg-white p-0.5 shadow-sm transition-transform duration-150 group-hover/msg:translate-y-0">
+          <div className="flex translate-y-1 items-center gap-0.5 rounded-full border border-stone-200 bg-white p-1 shadow-sm transition-transform duration-150 group-hover/msg:translate-y-0">
             {canReact &&
               QUICK_REACTIONS.map((emoji) => (
                 <button
@@ -437,7 +432,7 @@ function ChatBubble({
                   type="button"
                   onClick={() => onToggleReaction?.(emoji)}
                   aria-label={`React with ${emoji}`}
-                  className="flex size-7 items-center justify-center rounded-full text-[15px] leading-none transition-transform hover:scale-110 hover:bg-stone-100"
+                  className="flex size-7 items-center justify-center rounded-full text-[15px] leading-none transition-transform hover:scale-110 hover:bg-stone-100 group-hover/msg:pointer-events-auto"
                 >
                   {emoji}
                 </button>
@@ -473,7 +468,7 @@ function ChatBubble({
 function DeletedBubble({ side }: { side: "sent" | "received" }) {
   return (
     <div
-      className={`flex ${side === "sent" ? "justify-end" : "justify-start"}`}
+      className={`flex pointer-events-none ${side === "sent" ? "justify-end" : "justify-start"}`}
     >
       <div className="flex items-center gap-1.5 text-xs italic text-stone-400 border border-stone-200 rounded-2xl px-3 py-1.5 bg-stone-50 select-none">
         <svg
@@ -639,29 +634,22 @@ function BubbleAction({
   children: React.ReactNode;
 }) {
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={(props) => (
-          <Button
-            {...props}
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={onClick}
-            aria-label={label}
-            className={cn(
-              "size-7 rounded-full text-stone-500",
-              danger
-                ? "hover:bg-red-50 hover:text-red-600"
-                : "hover:bg-stone-100 hover:text-stone-700",
-            )}
-          >
-            {children}
-          </Button>
-        )}
-      />
-      <TooltipContent side="top">{label}</TooltipContent>
-    </Tooltip>
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className={cn(
+        "size-7 rounded-full text-stone-500",
+        danger
+          ? "hover:bg-red-50 hover:text-red-600"
+          : "hover:bg-stone-100 hover:text-stone-700",
+      )}
+    >
+      {children}
+    </Button>
   );
 }
 
@@ -1035,150 +1023,148 @@ function ConversationPanel({
   }
 
   return (
-    <TooltipProvider>
-      <div className="relative flex flex-col flex-1 h-full min-h-0 overflow-hidden">
-        <div className="absolute inset-0 z-0 opacity-[0.04] bg-[url('/doodles.svg')] bg-repeat pointer-events-none" />
+    <div className="relative flex flex-col flex-1 h-full min-h-0 overflow-hidden">
+      <div className="absolute inset-0 z-0 opacity-[0.04] bg-[url('/doodles.svg')] bg-repeat pointer-events-none" />
 
-        {/* Messages */}
-        <div className="relative z-10 flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-1">
-          {rawMessages === undefined ? (
-            <div className="flex items-center justify-center flex-1 text-stone-400 text-sm">
-              Loading…
-            </div>
-          ) : groups.length === 0 ? (
-            <div className="flex flex-col items-center justify-center flex-1 gap-2 text-stone-400">
+      {/* Messages */}
+      <div className="relative z-10 flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-1">
+        {rawMessages === undefined ? (
+          <div className="flex items-center justify-center flex-1 text-stone-400 text-sm">
+            Loading…
+          </div>
+        ) : groups.length === 0 ? (
+          <div className="flex flex-col items-center justify-center flex-1 gap-2 text-stone-400">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" />
+            </svg>
+            <p className="text-sm">No messages yet. Say hi!</p>
+          </div>
+        ) : (
+          groups.map((group) => (
+            <ChatGroup
+              key={group.id}
+              group={group}
+              currentUserId={currentUser?._id ?? ""}
+              showSenderName={isGroup}
+              isMessageRead={isMessageRead}
+              onReply={handleReply}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
+              onToggleReaction={(messageId, emoji) =>
+                toggleReaction({ messageId, emoji })
+              }
+              editing={editing}
+              editInput={editInput}
+              onEditInputChange={setEditInput}
+              onSaveEdit={handleSaveEdit}
+              onCancelEdit={handleCancelEdit}
+            />
+          ))
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Typing indicator */}
+      <div className="h-8 px-4 ml-2 mb-2 flex items-center">
+        <AnimatePresence>
+          {activeTypingUsers.length > 0 && (
+            <motion.div
+              className="relative flex gap-1.25 items-center px-3 py-2 rounded-2xl rounded-bl-sm bg-amber-50 shadow-sm"
+              initial={{ opacity: 0, y: 6, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 6, scale: 0.95 }}
+              transition={{ type: "spring", stiffness: 400, damping: 28 }}
+            >
+              {[0, 1, 2].map((i) => (
+                <motion.span
+                  key={i}
+                  className="block size-1 rounded-full bg-stone-500"
+                  animate={{ y: [0, -4, 0] }}
+                  transition={{
+                    duration: 0.6,
+                    repeat: Infinity,
+                    delay: i * 0.15,
+                    ease: "easeInOut",
+                  }}
+                />
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* Input area */}
+      <div className="relative z-10 border-t border-stone-200 bg-white/80 backdrop-blur-sm">
+        <AnimatePresence>
+          {replyingTo && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.15 }}
+              className="overflow-hidden"
+            >
+              <ReplyBar
+                replyingTo={replyingTo}
+                currentUserId={currentUser?._id ?? ""}
+                onCancel={() => setReplyingTo(null)}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <div className="px-4 pb-3 pt-2">
+          <div className="relative flex items-end rounded-2xl bg-stone-100 focus-within:ring-2 focus-within:ring-stone-300">
+            <textarea
+              ref={inputRef}
+              rows={1}
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value);
+                handleTyping(e.target.value);
+              }}
+              onKeyDown={handleKeyDown}
+              placeholder="Type a message…"
+              className="flex-1 resize-none bg-transparent px-4 py-3 pr-14 text-sm placeholder:text-stone-400 focus:outline-none max-h-32 leading-relaxed"
+              style={{ height: "auto" }}
+              onInput={(e) => {
+                const el = e.currentTarget;
+                el.style.height = "auto";
+                el.style.height = `${el.scrollHeight}px`;
+              }}
+            />
+            <Button
+              type="button"
+              size="icon"
+              onClick={handleSend}
+              disabled={!input.trim() || sending}
+              aria-label="Send message"
+              className="absolute bottom-2 right-2 size-9 shrink-0 rounded-full bg-black text-white hover:bg-black/90 disabled:opacity-40"
+            >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+                width="18"
+                height="18"
+                viewBox="0 0 256 256"
+                fill="currentColor"
               >
-                <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" />
+                <path d="M231.87,114l-168-95.89A16,16,0,0,0,40.92,37.34L71.55,128,40.92,218.67A16,16,0,0,0,56,240a16.15,16.15,0,0,0,7.93-2.1l167.92-96.05a16,16,0,0,0,.05-27.89ZM56,224a.56.56,0,0,0,0-.12L85.74,136H144a8,8,0,0,0,0-16H85.74L56.06,32.16A.46.46,0,0,0,56,32l168,95.83Z" />
               </svg>
-              <p className="text-sm">No messages yet. Say hi!</p>
-            </div>
-          ) : (
-            groups.map((group) => (
-              <ChatGroup
-                key={group.id}
-                group={group}
-                currentUserId={currentUser?._id ?? ""}
-                showSenderName={isGroup}
-                isMessageRead={isMessageRead}
-                onReply={handleReply}
-                onEdit={handleEdit}
-                onDelete={handleDelete}
-                onToggleReaction={(messageId, emoji) =>
-                  toggleReaction({ messageId, emoji })
-                }
-                editing={editing}
-                editInput={editInput}
-                onEditInputChange={setEditInput}
-                onSaveEdit={handleSaveEdit}
-                onCancelEdit={handleCancelEdit}
-              />
-            ))
-          )}
-          <div ref={bottomRef} />
-        </div>
-
-        {/* Typing indicator */}
-        <div className="h-8 px-4 ml-2 mb-2 flex items-center">
-          <AnimatePresence>
-            {activeTypingUsers.length > 0 && (
-              <motion.div
-                className="relative flex gap-1.25 items-center px-3 py-2 rounded-2xl rounded-bl-sm bg-amber-50 shadow-sm"
-                initial={{ opacity: 0, y: 6, scale: 0.95 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 6, scale: 0.95 }}
-                transition={{ type: "spring", stiffness: 400, damping: 28 }}
-              >
-                {[0, 1, 2].map((i) => (
-                  <motion.span
-                    key={i}
-                    className="block size-1 rounded-full bg-stone-500"
-                    animate={{ y: [0, -4, 0] }}
-                    transition={{
-                      duration: 0.6,
-                      repeat: Infinity,
-                      delay: i * 0.15,
-                      ease: "easeInOut",
-                    }}
-                  />
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        {/* Input area */}
-        <div className="relative z-10 border-t border-stone-200 bg-white/80 backdrop-blur-sm">
-          <AnimatePresence>
-            {replyingTo && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.15 }}
-                className="overflow-hidden"
-              >
-                <ReplyBar
-                  replyingTo={replyingTo}
-                  currentUserId={currentUser?._id ?? ""}
-                  onCancel={() => setReplyingTo(null)}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <div className="px-4 pb-3 pt-2">
-            <div className="relative flex items-end rounded-2xl bg-stone-100 focus-within:ring-2 focus-within:ring-stone-300">
-              <textarea
-                ref={inputRef}
-                rows={1}
-                value={input}
-                onChange={(e) => {
-                  setInput(e.target.value);
-                  handleTyping(e.target.value);
-                }}
-                onKeyDown={handleKeyDown}
-                placeholder="Type a message…"
-                className="flex-1 resize-none bg-transparent px-4 py-3 pr-14 text-sm placeholder:text-stone-400 focus:outline-none max-h-32 leading-relaxed"
-                style={{ height: "auto" }}
-                onInput={(e) => {
-                  const el = e.currentTarget;
-                  el.style.height = "auto";
-                  el.style.height = `${el.scrollHeight}px`;
-                }}
-              />
-              <Button
-                type="button"
-                size="icon"
-                onClick={handleSend}
-                disabled={!input.trim() || sending}
-                aria-label="Send message"
-                className="absolute bottom-2 right-2 size-9 shrink-0 rounded-full bg-black text-white hover:bg-black/90 disabled:opacity-40"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="18"
-                  height="18"
-                  viewBox="0 0 256 256"
-                  fill="currentColor"
-                >
-                  <path d="M231.87,114l-168-95.89A16,16,0,0,0,40.92,37.34L71.55,128,40.92,218.67A16,16,0,0,0,56,240a16.15,16.15,0,0,0,7.93-2.1l167.92-96.05a16,16,0,0,0,.05-27.89ZM56,224a.56.56,0,0,0,0-.12L85.74,136H144a8,8,0,0,0,0-16H85.74L56.06,32.16A.46.46,0,0,0,56,32l168,95.83Z" />
-                </svg>
-              </Button>
-            </div>
+            </Button>
           </div>
         </div>
       </div>
-    </TooltipProvider>
+    </div>
   );
 }
 

@@ -29,6 +29,17 @@ export default function ConversationList({ onSelect, selectedId }: Props) {
     api.messages.markConversationAsRead,
   );
 
+  const initDemoChat = useMutation(api.demoInit.initializeDemoChat);
+
+  useEffect(() => {
+    if (conversations !== undefined && conversations.length === 0) {
+      console.log("📱 No conversations found, initializing demo chat...");
+      initDemoChat()
+        .then(() => console.log("✅ Demo chat initialized"))
+        .catch((error) => console.error("❌ Demo chat error:", error));
+    }
+  }, [conversations, initDemoChat]);
+
   useEffect(() => {
     if (!selectedId || !conversations) return;
 

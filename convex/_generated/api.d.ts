@@ -10,6 +10,8 @@
 
 import type * as auth from "../auth.js";
 import type * as conversations from "../conversations.js";
+import type * as demoChatSeeding from "../demoChatSeeding.js";
+import type * as demoInit from "../demoInit.js";
 import type * as http from "../http.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_conversations from "../lib/conversations.js";
@@ -26,6 +28,8 @@ import type {
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   conversations: typeof conversations;
+  demoChatSeeding: typeof demoChatSeeding;
+  demoInit: typeof demoInit;
   http: typeof http;
   "lib/auth": typeof lib_auth;
   "lib/conversations": typeof lib_conversations;

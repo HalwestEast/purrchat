@@ -10,6 +10,16 @@ import ConversationList from "./conversation-list";
 import type { Id } from "../../convex/_generated/dataModel";
 import { AnimatePresence, motion } from "motion/react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 
 import { cn } from "@/lib/utils";
@@ -179,7 +189,7 @@ type BubbleTheme = (v: BubbleVariants & { class?: string }) => string;
 const chatGroupClasses = tv({
   slots: {
     root: "flex flex-col",
-    bubbles: "flex flex-col gap-0.5",
+    bubbles: "flex flex-col gap-0.5 max-w-[85%] sm:max-w-[75%]",
     label: "text-[11px] text-stone-400 font-medium px-1 mb-0.5",
     divider:
       "text-xs shadow-sm bg-yellow-100 rounded-full text-stone-800 text-center w-fit px-2 py-1 select-none",
@@ -338,13 +348,18 @@ function ChatBubble({
   const showChecks = side === "sent" && isRead !== undefined;
   const bubbleSide = side ?? "sent";
   const canReact = Boolean(onToggleReaction);
+  // "Delete for me" is available on ANY message, so onDelete is no longer
+  // gated behind isOwn. Only editing stays sender-only.
   const hasActions =
-    canReact || Boolean(onReply || (isOwn && (onEdit || onDelete)));
+    canReact || Boolean(onReply || onDelete || (isOwn && onEdit));
 
   return (
     <div
+      // Focusable so a tap on touch devices opens the action toolbar
+      // (which is shown via focus-within, not just hover).
+      tabIndex={0}
       className={cn(
-        "relative flex flex-col group/msg",
+        "relative flex flex-col group/msg outline-none",
         bubbleSide === "sent" ? "items-end" : "items-start",
       )}
     >
@@ -438,7 +453,7 @@ function ChatBubble({
                 </button>
               ))}
 
-            {canReact && (onReply || (isOwn && (onEdit || onDelete))) && (
+            {canReact && (onReply || onDelete || (isOwn && onEdit)) && (
               <span className="mx-0.5 h-4 w-px shrink-0 bg-stone-200" />
             )}
 
@@ -452,8 +467,8 @@ function ChatBubble({
                 <IconEdit />
               </BubbleAction>
             )}
-            {isOwn && onDelete && (
-              <BubbleAction label="Delete" onClick={onDelete} danger>
+            {onDelete && (
+              <BubbleAction label="Delete for me" onClick={onDelete} danger>
                 <IconDelete />
               </BubbleAction>
             )}
@@ -464,7 +479,7 @@ function ChatBubble({
   );
 }
 
-/** Placeholder shown in place of a deleted message */
+/** Placeholder shown in place of a message deleted for everyone */
 function DeletedBubble({ side }: { side: "sent" | "received" }) {
   return (
     <div
@@ -708,7 +723,7 @@ function ChatGroup({
         )}
         <div className={bubbles()}>
           {group.messages.map((msg, i) => {
-            // Deleted
+            // Deleted for everyone
             if (msg.isDeleted) {
               return <DeletedBubble key={msg.id} side={group.side} />;
             }
@@ -813,10 +828,15 @@ function ReplyBar({
 
 function ConversationPanel({
   conversationId,
+  onBack,
 }: {
   conversationId: Id<"conversations">;
+  onBack: () => void;
 }) {
   const currentUser = useQuery(api.users.currentUser);
+  const conversationInfo = useQuery(api.conversations.getConversation, {
+    conversationId,
+  });
   const rawMessages = useQuery(api.messages.listMessages, { conversationId });
   const typingUsers = useQuery(api.messages.getTypingUsers, { conversationId });
   const readReceipts = useQuery(api.messages.getReadReceipts, {
@@ -860,7 +880,27 @@ function ConversationPanel({
   });
 
   const editMessageMutation = useMutation(api.messages.editMessage);
-  const deleteMessageMutation = useMutation(api.messages.deleteMessage);
+
+  // "Delete for me" with an optimistic update: the message disappears from
+  // MY list instantly. Nothing changes for the other participants.
+  const deleteMessageMutation = useMutation(
+    api.messages.deleteMessageForMe,
+  ).withOptimisticUpdate((localStore, args) => {
+    const existing = localStore.getQuery(api.messages.listMessages, {
+      conversationId,
+    });
+    if (existing === undefined) return;
+    localStore.setQuery(
+      api.messages.listMessages,
+      { conversationId },
+      existing.map((m) =>
+        m._id === args.messageId
+          ? { ...m, content: "", isDeleted: true, replyToPreview: undefined }
+          : m,
+      ),
+    );
+  });
+
   const setTypingStatus = useMutation(api.messages.setTypingStatus);
 
   const toggleReaction = useMutation(
@@ -916,6 +956,7 @@ function ConversationPanel({
   const [replyingTo, setReplyingTo] = useState<ReplyingTo | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [editInput, setEditInput] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<Message | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -980,9 +1021,16 @@ function ConversationPanel({
     setEditInput("");
   }
 
-  // ── Delete ──
-  async function handleDelete(msg: Message) {
-    await deleteMessageMutation({ messageId: msg.id as Id<"messages"> });
+  // ── Delete (for me) ──
+  function handleDelete(msg: Message) {
+    setDeleteTarget(msg);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    const id = deleteTarget.id as Id<"messages">;
+    setDeleteTarget(null);
+    await deleteMessageMutation({ messageId: id });
   }
 
   // ── Send ──
@@ -1025,6 +1073,46 @@ function ConversationPanel({
   return (
     <div className="relative flex flex-col flex-1 h-full min-h-0 overflow-hidden">
       <div className="absolute inset-0 z-0 opacity-[0.04] bg-[url('/doodles.svg')] bg-repeat pointer-events-none" />
+
+      {/* Mobile header: back button + conversation name (hidden on md+) */}
+      <div className="relative z-10 flex items-center gap-1 border-b border-stone-200 bg-white/90 px-2 py-2 backdrop-blur-sm md:hidden">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={onBack}
+          aria-label="Back to conversations"
+          className="size-9 shrink-0 rounded-full text-stone-600"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="m15 18-6-6 6-6" />
+          </svg>
+        </Button>
+        {conversationInfo?.image ? (
+          <img
+            src={conversationInfo.image}
+            alt={conversationInfo.name}
+            className="size-8 shrink-0 rounded-full object-cover"
+          />
+        ) : (
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-stone-300 text-sm font-medium text-black">
+            {conversationInfo?.name?.[0]?.toUpperCase() ?? "?"}
+          </div>
+        )}
+        <span className="ml-1.5 truncate text-sm font-semibold text-stone-800">
+          {conversationInfo?.name ?? ""}
+        </span>
+      </div>
 
       {/* Messages */}
       <div className="relative z-10 flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-1">
@@ -1135,7 +1223,7 @@ function ConversationPanel({
               }}
               onKeyDown={handleKeyDown}
               placeholder="Type a message…"
-              className="flex-1 resize-none bg-transparent px-4 py-3 pr-14 text-sm placeholder:text-stone-400 focus:outline-none max-h-32 leading-relaxed"
+              className="flex-1 resize-none bg-transparent px-4 py-3 pr-14 text-base md:text-sm placeholder:text-stone-400 focus:outline-none max-h-32 leading-relaxed"
               style={{ height: "auto" }}
               onInput={(e) => {
                 const el = e.currentTarget;
@@ -1164,6 +1252,31 @@ function ConversationPanel({
           </div>
         </div>
       </div>
+
+      {/* Delete-message confirmation */}
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+      >
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete message?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this? It will only be removed for
+              you — the other person will still see it.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDelete}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              Delete for me
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -1177,8 +1290,16 @@ export default function ConversationContainer() {
   >();
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-stone-50">
-      <div className="w-80 shrink-0 border-r border-stone-200 bg-white flex flex-col">
+    // h-dvh instead of h-screen: tracks the real visible height on mobile
+    // browsers, where the URL bar collapses/expands.
+    <div className="flex h-dvh w-full overflow-hidden bg-stone-50">
+      {/* Sidebar: full-screen on mobile, hidden there once a chat is open */}
+      <div
+        className={cn(
+          "w-full md:w-80 shrink-0 border-r border-stone-200 bg-white flex-col",
+          selectedId ? "hidden md:flex" : "flex",
+        )}
+      >
         <ConversationList onSelect={setSelectedId} selectedId={selectedId} />
         <div className="mt-auto border-t border-stone-100 p-3">
           <button
@@ -1205,9 +1326,19 @@ export default function ConversationContainer() {
         </div>
       </div>
 
-      <div className="flex flex-1 flex-col min-w-0">
+      {/* Panel: full-screen on mobile when a chat is open */}
+      <div
+        className={cn(
+          "flex-1 flex-col min-w-0",
+          selectedId ? "flex" : "hidden md:flex",
+        )}
+      >
         {selectedId ? (
-          <ConversationPanel key={selectedId} conversationId={selectedId} />
+          <ConversationPanel
+            key={selectedId}
+            conversationId={selectedId}
+            onBack={() => setSelectedId(undefined)}
+          />
         ) : (
           <div className="flex flex-col items-center justify-center flex-1 gap-3 text-stone-400">
             <svg

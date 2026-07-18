@@ -30,6 +30,8 @@ export const createConversation = mutation({
           )
           .unique();
 
+        // Reuse the existing DM. If this user had cleared it, the
+        // clearedAt watermark still hides the old history for them.
         if (otherParticipant) return p.conversationId;
       }
     }
@@ -61,6 +63,79 @@ export const createConversation = mutation({
     );
 
     return conversationId;
+  },
+});
+
+/**
+ * "Delete for me": the conversation disappears from this user's list and its
+ * existing history is hidden for them. Nothing is deleted from the database,
+ * and the other participants are not affected. If someone sends a new
+ * message afterwards, the conversation reappears for this user showing only
+ * messages sent after the deletion.
+ */
+export const deleteConversationForMe = mutation({
+  args: { conversationId: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+
+    const participant = await ctx.db
+      .query("participants")
+      .withIndex("by_conversation_user", (q) =>
+        q.eq("conversationId", args.conversationId).eq("userId", user._id),
+      )
+      .unique();
+    if (!participant) throw new Error("Unauthorized");
+
+    await ctx.db.patch(participant._id, { clearedAt: Date.now() });
+  },
+});
+
+/**
+ * Lightweight info for a single conversation — used by the mobile
+ * chat header (name + image + back navigation).
+ */
+export const getConversation = query({
+  args: { conversationId: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUser(ctx);
+
+    const me = await ctx.db
+      .query("participants")
+      .withIndex("by_conversation_user", (q) =>
+        q
+          .eq("conversationId", args.conversationId)
+          .eq("userId", currentUser._id),
+      )
+      .unique();
+    if (!me) return null;
+
+    const conversation = await ctx.db.get(args.conversationId);
+    if (!conversation) return null;
+
+    let name = conversation.title ?? "Unnamed Group";
+    let image = conversation.image;
+
+    if (conversation.type === "dm") {
+      const otherParticipation = await ctx.db
+        .query("participants")
+        .withIndex("by_conversation", (q) =>
+          q.eq("conversationId", conversation._id),
+        )
+        .filter((q) => q.neq(q.field("userId"), currentUser._id))
+        .unique();
+      const otherUser = otherParticipation
+        ? await ctx.db.get(otherParticipation.userId)
+        : null;
+      name = otherUser?.name ?? "Unknown User";
+      image = otherUser?.image;
+    }
+
+    return {
+      _id: conversation._id,
+      type: conversation.type,
+      name,
+      image,
+    };
   },
 });
 
@@ -100,12 +175,18 @@ export const listConversations = query({
           otherUser,
           role: participation.role,
           lastReadAt: participation.lastReadAt,
+          clearedAt: participation.clearedAt,
         };
       }),
     );
 
     return conversations
       .filter(Boolean)
+      .filter((c) => {
+        // Hidden if the user cleared it and nothing has happened since.
+        if (!c!.clearedAt) return true;
+        return (c!.lastMessageAt ?? 0) > c!.clearedAt;
+      })
       .sort(
         (a, b) =>
           (b!.lastMessageAt ?? b!.updatedAt) -

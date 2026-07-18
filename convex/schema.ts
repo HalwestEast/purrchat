@@ -4,6 +4,18 @@ import { v } from "convex/values";
 
 const schema = defineSchema({
   ...authTables,
+
+  users: defineTable({
+    name: v.optional(v.string()),
+    image: v.optional(v.string()),
+    email: v.optional(v.string()),
+    emailVerificationTime: v.optional(v.number()),
+    phone: v.optional(v.string()),
+    phoneVerificationTime: v.optional(v.number()),
+    isAnonymous: v.optional(v.boolean()),
+    demoInitialized: v.optional(v.boolean()),
+  }).index("email", ["email"]),
+
   conversations: defineTable({
     type: v.union(v.literal("dm"), v.literal("group")),
     title: v.optional(v.string()),
@@ -22,6 +34,7 @@ const schema = defineSchema({
     role: v.union(v.literal("member"), v.literal("admin"), v.literal("owner")),
     joinedAt: v.number(),
     lastReadAt: v.optional(v.number()),
+    clearedAt: v.optional(v.number()),
   })
     .index("by_conversation", ["conversationId"])
     .index("by_user", ["userId"])
@@ -51,6 +64,15 @@ const schema = defineSchema({
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
   }).index("by_conversation_createdAt", ["conversationId", "createdAt"]),
+
+  messageDeletions: defineTable({
+    messageId: v.id("messages"),
+    conversationId: v.id("conversations"),
+    userId: v.id("users"),
+    deletedAt: v.number(),
+  })
+    .index("by_user_conversation", ["userId", "conversationId"])
+    .index("by_user_message", ["userId", "messageId"]),
 
   reactions: defineTable({
     messageId: v.id("messages"),

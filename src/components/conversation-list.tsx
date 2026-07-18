@@ -1,9 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 
 import type { Id } from "../../convex/_generated/dataModel";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,7 +27,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 type Props = {
-  onSelect: (conversationId: Id<"conversations">) => void;
+  // Accepts undefined so the panel can be deselected after deleting
+  // the currently-open conversation.
+  onSelect: (conversationId: Id<"conversations"> | undefined) => void;
   selectedId?: Id<"conversations">;
 };
 
@@ -28,11 +40,25 @@ export default function ConversationList({ onSelect, selectedId }: Props) {
   const markConversationAsRead = useMutation(
     api.messages.markConversationAsRead,
   );
+  const deleteConversation = useMutation(
+    api.conversations.deleteConversationForMe,
+  );
 
   const initDemoChat = useMutation(api.demoInit.initializeDemoChat);
 
+  // Only attempt demo init once per session, so "delete for me" on your
+  // last conversation doesn't respawn the demo chat. Also add a
+  // `demoInitialized` guard inside the initializeDemoChat mutation itself
+  // (see the note accompanying this code).
+  const demoInitAttempted = useRef(false);
+
   useEffect(() => {
-    if (conversations !== undefined && conversations.length === 0) {
+    if (
+      conversations !== undefined &&
+      conversations.length === 0 &&
+      !demoInitAttempted.current
+    ) {
+      demoInitAttempted.current = true;
       console.log("📱 No conversations found, initializing demo chat...");
       initDemoChat()
         .then(() => console.log("✅ Demo chat initialized"))
@@ -66,6 +92,12 @@ export default function ConversationList({ onSelect, selectedId }: Props) {
   const [selectedUsers, setSelectedUsers] = useState<Id<"users">[]>([]);
   const [groupTitle, setGroupTitle] = useState("");
   const [creating, setCreating] = useState(false);
+
+  const [deleteTarget, setDeleteTarget] = useState<{
+    id: Id<"conversations">;
+    name: string;
+  } | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const isGroup = selectedUsers.length > 1;
 
@@ -102,6 +134,19 @@ export default function ConversationList({ onSelect, selectedId }: Props) {
     setSearch("");
     setSelectedUsers([]);
     setGroupTitle("");
+  }
+
+  async function confirmDeleteConversation() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      // Deselect first so the open panel closes cleanly.
+      if (selectedId === deleteTarget.id) onSelect(undefined);
+      await deleteConversation({ conversationId: deleteTarget.id });
+      setDeleteTarget(null);
+    } finally {
+      setDeleting(false);
+    }
   }
 
   return (
@@ -155,10 +200,9 @@ export default function ConversationList({ onSelect, selectedId }: Props) {
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              className="lucide lucide-message-square-icon lucide-message-square"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
             >
               <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" />
             </svg>
@@ -182,72 +226,101 @@ export default function ConversationList({ onSelect, selectedId }: Props) {
                   conversation.lastMessageAt > conversation.lastReadAt);
 
               return (
-                <button
-                  key={conversation._id}
-                  onClick={() => onSelect(conversation._id)}
-                  className={`flex items-center gap-3 p-3 rounded-xl text-left transition-colors w-full
-                    ${isSelected ? "bg-gray-200 text-black" : "hover:bg-gray-100 text-black"}`}
-                >
-                  <div className="relative shrink-0">
-                    <Avatar className="h-11 w-11">
-                      {image && (
-                        <AvatarImage
-                          src={image}
-                          alt={name}
-                          className="object-cover"
-                        />
-                      )}
-                      <AvatarFallback className="bg-stone-300 text-black">
-                        {isDm ? (
-                          <span className="text-sm font-medium">
-                            {name[0]?.toUpperCase()}
-                          </span>
-                        ) : (
-                          <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            width="22"
-                            height="22"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-                            <path d="M16 3.128a4 4 0 0 1 0 7.744" />
-                            <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
-                            <circle cx="9" cy="7" r="4" />
-                          </svg>
+                <div key={conversation._id} className="group/row relative">
+                  <button
+                    onClick={() => onSelect(conversation._id)}
+                    className={`flex items-center gap-3 p-3 pr-10 rounded-xl text-left transition-colors w-full
+                      ${isSelected ? "bg-gray-200 text-black" : "hover:bg-gray-100 text-black"}`}
+                  >
+                    <div className="relative shrink-0">
+                      <Avatar className="h-11 w-11">
+                        {image && (
+                          <AvatarImage
+                            src={image}
+                            alt={name}
+                            className="object-cover"
+                          />
                         )}
-                      </AvatarFallback>
-                    </Avatar>
-                    {hasUnread && (
-                      <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-blue-500 rounded-full border-2 border-white" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium text-sm truncate">
-                        {name}
-                      </span>
-                      {conversation.lastMessageAt && (
-                        <span
-                          className={`text-xs shrink-0 ${isSelected ? "text-stone-800" : "text-stone-800"}`}
-                        >
-                          {formatTime(conversation.lastMessageAt)}
-                        </span>
+                        <AvatarFallback className="bg-stone-300 text-black">
+                          {isDm ? (
+                            <span className="text-sm font-medium">
+                              {name[0]?.toUpperCase()}
+                            </span>
+                          ) : (
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              width="22"
+                              height="22"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                              <path d="M16 3.128a4 4 0 0 1 0 7.744" />
+                              <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                              <circle cx="9" cy="7" r="4" />
+                            </svg>
+                          )}
+                        </AvatarFallback>
+                      </Avatar>
+                      {hasUnread && (
+                        <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-blue-500 rounded-full border-2 border-white" />
                       )}
                     </div>
-                    {conversation.lastMessagePreview && (
-                      <p
-                        className={`text-xs truncate mt-0.5 ${isSelected ? "text-stone-600" : "text-stone-900"}`}
-                      >
-                        {conversation.lastMessagePreview}
-                      </p>
-                    )}
-                  </div>
-                </button>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-sm truncate">
+                          {name}
+                        </span>
+                        {conversation.lastMessageAt && (
+                          <span
+                            className={`text-xs shrink-0 ${isSelected ? "text-stone-800" : "text-stone-800"}`}
+                          >
+                            {formatTime(conversation.lastMessageAt)}
+                          </span>
+                        )}
+                      </div>
+                      {conversation.lastMessagePreview && (
+                        <p
+                          className={`text-xs truncate mt-0.5 ${isSelected ? "text-stone-600" : "text-stone-900"}`}
+                        >
+                          {conversation.lastMessagePreview}
+                        </p>
+                      )}
+                    </div>
+                  </button>
+
+                  {/* Delete (for me) — appears on hover */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDeleteTarget({ id: conversation._id, name })
+                    }
+                    aria-label={`Delete ${name}`}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-full text-stone-400 transition-opacity hover:bg-red-50 hover:text-red-600 opacity-100 md:opacity-0 md:group-hover/row:opacity-100 focus-visible:opacity-100"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                      <path d="M10 11v6" />
+                      <path d="M14 11v6" />
+                      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                    </svg>
+                  </button>
+                </div>
               );
             })}
           </div>
@@ -361,6 +434,33 @@ export default function ConversationList({ onSelect, selectedId }: Props) {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Delete-conversation confirmation */}
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => !open && !deleting && setDeleteTarget(null)}
+      >
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete conversation?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{deleteTarget?.name}"? It will
+              only be deleted for you. If someone sends a new message, the chat
+              will reappear without the old history.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDeleteConversation}
+              disabled={deleting}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {deleting ? "Deleting..." : "Delete for me"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

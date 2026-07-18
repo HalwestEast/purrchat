@@ -49,17 +49,45 @@ export const sendMessage = mutation({
 export const listMessages = query({
   args: { conversationId: v.id("conversations") },
   handler: async (ctx, args) => {
-    await ensureParticipant(ctx, args.conversationId);
+    const user = await ensureParticipant(ctx, args.conversationId);
 
+    // "Delete for me" watermark for this user.
+    const participant = await ctx.db
+      .query("participants")
+      .withIndex("by_conversation_user", (q) =>
+        q.eq("conversationId", args.conversationId).eq("userId", user._id),
+      )
+      .unique();
+    const clearedAt = participant?.clearedAt ?? 0;
+
+    // All messages this user has individually hidden in this conversation.
+    const myDeletions = await ctx.db
+      .query("messageDeletions")
+      .withIndex("by_user_conversation", (q) =>
+        q.eq("userId", user._id).eq("conversationId", args.conversationId),
+      )
+      .collect();
+    const hiddenIds = new Set(myDeletions.map((d) => d.messageId));
+
+    // The .gt() rides the index, so cleared history is never even read.
     const messages = await ctx.db
       .query("messages")
       .withIndex("by_conversation_createdAt", (q) =>
-        q.eq("conversationId", args.conversationId),
+        q.eq("conversationId", args.conversationId).gt("createdAt", clearedAt),
       )
       .collect();
 
+    // Messages you deleted-for-me are kept in the list but flagged, so the
+    // UI can render the "Message removed" placeholder in their place.
+    // Content is blanked so nothing you deleted is sent to your client.
+    const withDeletions = messages.map((m) =>
+      hiddenIds.has(m._id)
+        ? { ...m, content: "", isDeleted: true, replyToPreview: undefined }
+        : m,
+    );
+
     return Promise.all(
-      messages.map(async (msg) => {
+      withDeletions.map(async (msg) => {
         const sender = await ctx.db.get(msg.senderId);
 
         // Resolve reply sender name for display
@@ -107,6 +135,40 @@ export const editMessage = mutation({
   },
 });
 
+/**
+ * "Delete for me": hides the message for the current user only.
+ * The other side of the conversation is not affected.
+ * Works on any message in the conversation, not just your own.
+ */
+export const deleteMessageForMe = mutation({
+  args: { messageId: v.id("messages") },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    if (!message) throw new Error("Message not found");
+
+    const user = await ensureParticipant(ctx, message.conversationId);
+
+    const existing = await ctx.db
+      .query("messageDeletions")
+      .withIndex("by_user_message", (q) =>
+        q.eq("userId", user._id).eq("messageId", args.messageId),
+      )
+      .unique();
+    if (existing) return; // already hidden — idempotent
+
+    await ctx.db.insert("messageDeletions", {
+      messageId: args.messageId,
+      conversationId: message.conversationId,
+      userId: user._id,
+      deletedAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * "Delete for everyone": sender-only. Kept for future use — shows the
+ * "Message removed" placeholder on both sides. Not wired to the UI right now.
+ */
 export const deleteMessage = mutation({
   args: {
     messageId: v.id("messages"),
@@ -130,6 +192,13 @@ export const deleteMessage = mutation({
       isDeleted: true,
       deletedAt: Date.now(),
     });
+
+    // Clean up reactions on the removed message.
+    const reactions = await ctx.db
+      .query("reactions")
+      .withIndex("by_message", (q) => q.eq("messageId", args.messageId))
+      .collect();
+    await Promise.all(reactions.map((r) => ctx.db.delete(r._id)));
 
     const conversation = await ctx.db.get(message.conversationId);
 

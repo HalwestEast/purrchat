@@ -30,8 +30,6 @@ export const createConversation = mutation({
           )
           .unique();
 
-        // Reuse the existing DM. If this user had cleared it, the
-        // clearedAt watermark still hides the old history for them.
         if (otherParticipant) return p.conversationId;
       }
     }
@@ -154,7 +152,6 @@ export const listConversations = query({
         const conversation = await ctx.db.get(participation.conversationId);
         if (!conversation) return null;
 
-        // For DMs, get the other participant's info
         let otherUser = null;
         if (conversation.type === "dm") {
           const otherParticipation = await ctx.db
@@ -170,8 +167,27 @@ export const listConversations = query({
           }
         }
 
+        let lastMessagePreview = conversation.lastMessagePreview;
+        if (conversation.lastMessageId) {
+          const hiddenForMe = await ctx.db
+            .query("messageDeletions")
+            .withIndex("by_user_message", (q) =>
+              q
+                .eq("userId", currentUser._id)
+                .eq("messageId", conversation.lastMessageId!),
+            )
+            .unique();
+          const lastMessage = hiddenForMe
+            ? null
+            : await ctx.db.get(conversation.lastMessageId);
+          if (hiddenForMe || lastMessage?.isDeleted) {
+            lastMessagePreview = "Message removed";
+          }
+        }
+
         return {
           ...conversation,
+          lastMessagePreview,
           otherUser,
           role: participation.role,
           lastReadAt: participation.lastReadAt,
@@ -183,7 +199,6 @@ export const listConversations = query({
     return conversations
       .filter(Boolean)
       .filter((c) => {
-        // Hidden if the user cleared it and nothing has happened since.
         if (!c!.clearedAt) return true;
         return (c!.lastMessageAt ?? 0) > c!.clearedAt;
       })

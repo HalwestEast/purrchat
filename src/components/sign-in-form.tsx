@@ -23,8 +23,8 @@ export default function SignInForm() {
         <CardContent className="p-10">
           <div className="flex flex-col items-center text-center">
             {/* Logo */}
-            <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-3xl bg-stone-900 text-white shadow-sm">
-              <span className="text-2xl">🐾</span>
+            <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-3xl  text-white shadow-sm">
+              <span className="text-2xl">🐈‍⬛</span>
             </div>
 
             {/* Heading */}
@@ -34,7 +34,7 @@ export default function SignInForm() {
             <p className="mt-2 text-sm text-stone-500">
               {isLoading
                 ? "Setting up your demo chat..."
-                : "Sign in to explore demo conversations"}
+                : "Sign in to to start chatting"}
             </p>
           </div>
 
@@ -96,11 +96,6 @@ export default function SignInForm() {
               )}
             </Button>
           </div>
-
-          <p className="mt-6 text-center text-xs text-stone-400">
-            Each account gets a personalized demo with sample conversations,
-            reactions, and replies.
-          </p>
         </CardContent>
       </Card>
     </div>

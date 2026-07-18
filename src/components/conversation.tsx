@@ -19,7 +19,24 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "../components/ui/alert-dialog";
+} from "@/components/ui/alert-dialog";
+import { Bubble, BubbleContent } from "@/components/ui/bubble";
+import {
+  Message as MessageRow,
+  MessageContent,
+  MessageGroup,
+  MessageHeader,
+} from "@/components/ui/message";
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+  useMessageScroller,
+  useMessageScrollerVisibility,
+} from "@/components/ui/message-scroller";
 import { Button } from "@/components/ui/button";
 
 import { cn } from "@/lib/utils";
@@ -54,7 +71,7 @@ interface Editing {
   original: string;
 }
 
-interface MessageGroup {
+interface MessageGroupData {
   id: string;
   senderId: string;
   senderName?: string;
@@ -62,6 +79,8 @@ interface MessageGroup {
   messages: Message[];
   showTimestamp: boolean;
   timestampLabel?: string;
+  /** True when this group starts after a long pause (time-based break). */
+  timeSeparated: boolean;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -86,11 +105,11 @@ function groupMessages(
   messages: Message[],
   currentUserId: string,
   groupBreakMs = GROUP_BREAK_MS,
-): MessageGroup[] {
+): MessageGroupData[] {
   if (!messages.length) return [];
   const sorted = [...messages].sort((a, b) => a.timestamp - b.timestamp);
-  const groups: MessageGroup[] = [];
-  let current: MessageGroup | null = null;
+  const groups: MessageGroupData[] = [];
+  let current: MessageGroupData | null = null;
 
   for (let i = 0; i < sorted.length; i++) {
     const msg = sorted[i];
@@ -111,6 +130,7 @@ function groupMessages(
         timestampLabel: showTimestamp
           ? formatTimestamp(msg.timestamp)
           : undefined,
+        timeSeparated: Boolean(prev) && longPause,
       };
       groups.push(current);
     }
@@ -121,15 +141,14 @@ function groupMessages(
 
 // ─── Styling ──────────────────────────────────────────────────────────────────
 
-const chatBubbleBase = tv({
-  base: [
-    "w-fit py-1 px-3 text-sm shadow-sm leading-relaxed break-words",
-    "[--r:0.6rem]",
-    "[--r-soft:3px]",
-  ],
+// Our signature corner treatment, kept from the original design: radii change
+// based on the bubble's position in its group. This is applied on top of
+// shadcn's BubbleContent via className, overriding its default radius.
+const bubbleRadii = tv({
+  base: ["[--r:0.6rem]", "[--r-soft:3px]"],
   variants: {
     position: { first: "", middle: "", last: "", solo: "" },
-    side: { sent: "self-end", received: "self-start" },
+    side: { sent: "", received: "" },
   },
   compoundVariants: [
     {
@@ -174,34 +193,134 @@ const chatBubbleBase = tv({
   defaultVariants: { position: "solo", side: "sent" },
 });
 
-const darkBubble = tv({
-  extend: chatBubbleBase,
-  base: "bg-emerald-600 text-white",
-});
-const lightBubble = tv({
-  extend: chatBubbleBase,
-  base: "bg-gray-500 text-white",
-});
+type BubbleVariants = VariantProps<typeof bubbleRadii>;
 
-type BubbleVariants = VariantProps<typeof chatBubbleBase>;
-type BubbleTheme = (v: BubbleVariants & { class?: string }) => string;
+// ─── Own-bubble color themes ──────────────────────────────────────────────────
+// Only YOUR bubbles change color; received bubbles stay gray. Each theme also
+// covers the edit UI, the reply tint inside your bubbles, the reply bar
+// accent, and the highlighted state of your own reaction chips.
 
-const chatGroupClasses = tv({
-  slots: {
-    root: "flex flex-col",
-    bubbles: "flex flex-col gap-0.5 max-w-[85%] sm:max-w-[75%]",
-    label: "text-[11px] text-stone-400 font-medium px-1 mb-0.5",
-    divider:
-      "text-xs shadow-sm bg-yellow-100 rounded-full text-stone-800 text-center w-fit px-2 py-1 select-none",
+const BUBBLE_THEMES = {
+  emerald: {
+    hex: "#059669", // emerald-600
+    swatch: "bg-emerald-600",
+    bubble: "bg-emerald-600 text-white",
+    replyTint: "bg-emerald-500/70 border-emerald-200/80",
+    edit: "bg-emerald-600",
+    editButton: "bg-emerald-600 hover:bg-emerald-700",
+    accentBorder: "border-emerald-500",
+    accentText: "text-emerald-600",
+    chipActive: "border-emerald-300 bg-emerald-50 text-emerald-700",
   },
-  variants: {
-    side: {
-      sent: { root: "items-end", label: "text-right" },
-      received: { root: "items-start", label: "text-left" },
-    },
+  sky: {
+    hex: "#0284c7", // sky-600
+    swatch: "bg-sky-600",
+    bubble: "bg-sky-600 text-white",
+    replyTint: "bg-sky-500/70 border-sky-200/80",
+    edit: "bg-sky-600",
+    editButton: "bg-sky-600 hover:bg-sky-700",
+    accentBorder: "border-sky-500",
+    accentText: "text-sky-600",
+    chipActive: "border-sky-300 bg-sky-50 text-sky-700",
   },
-  defaultVariants: { side: "sent" },
-});
+  violet: {
+    hex: "#7c3aed", // violet-600
+    swatch: "bg-violet-600",
+    bubble: "bg-violet-600 text-white",
+    replyTint: "bg-violet-500/70 border-violet-200/80",
+    edit: "bg-violet-600",
+    editButton: "bg-violet-600 hover:bg-violet-700",
+    accentBorder: "border-violet-500",
+    accentText: "text-violet-600",
+    chipActive: "border-violet-300 bg-violet-50 text-violet-700",
+  },
+  rose: {
+    hex: "#e11d48", // rose-600
+    swatch: "bg-rose-600",
+    bubble: "bg-rose-600 text-white",
+    replyTint: "bg-rose-500/70 border-rose-200/80",
+    edit: "bg-rose-600",
+    editButton: "bg-rose-600 hover:bg-rose-700",
+    accentBorder: "border-rose-500",
+    accentText: "text-rose-600",
+    chipActive: "border-rose-300 bg-rose-50 text-rose-700",
+  },
+  amber: {
+    hex: "#d97706", // amber-600
+    swatch: "bg-amber-600",
+    bubble: "bg-amber-600 text-white",
+    replyTint: "bg-amber-500/70 border-amber-200/80",
+    edit: "bg-amber-600",
+    editButton: "bg-amber-600 hover:bg-amber-700",
+    accentBorder: "border-amber-500",
+    accentText: "text-amber-600",
+    chipActive: "border-amber-300 bg-amber-50 text-amber-700",
+  },
+  stone: {
+    hex: "#292524", // stone-800
+    swatch: "bg-stone-800",
+    bubble: "bg-stone-800 text-white",
+    replyTint: "bg-stone-600/70 border-stone-400/80",
+    edit: "bg-stone-800",
+    editButton: "bg-stone-800 hover:bg-stone-700",
+    accentBorder: "border-stone-700",
+    accentText: "text-stone-700",
+    chipActive: "border-stone-300 bg-stone-100 text-stone-800",
+  },
+} as const;
+
+type ThemeKey = keyof typeof BUBBLE_THEMES;
+
+const RECEIVED_BUBBLE = "bg-gray-500 text-white";
+const RECEIVED_HEX = "#6b7280"; // gray-500
+
+/** Quick swatch picker for the own-bubble color theme. */
+function ThemePicker({
+  theme,
+  onChange,
+  className,
+}: {
+  theme: ThemeKey;
+  onChange: (t: ThemeKey) => void;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={cn("flex items-center gap-1", className)}>
+      {open && (
+        <div className="flex items-center gap-1 rounded-full border border-stone-200 bg-white p-1 shadow-sm">
+          {(Object.keys(BUBBLE_THEMES) as ThemeKey[]).map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => {
+                onChange(key);
+                setOpen(false);
+              }}
+              aria-label={`Use ${key} bubble color`}
+              className={cn(
+                "size-5 rounded-full transition-transform hover:scale-110",
+                BUBBLE_THEMES[key].swatch,
+                theme === key && "ring-2 ring-stone-400 ring-offset-1",
+              )}
+            />
+          ))}
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-label="Change bubble color"
+        title="Change bubble color"
+        className="flex size-8 items-center justify-center rounded-full border border-stone-200 bg-white shadow-sm hover:bg-stone-50"
+      >
+        <span
+          className={cn("size-4 rounded-full", BUBBLE_THEMES[theme].swatch)}
+        />
+      </button>
+    </div>
+  );
+}
 
 function resolvePosition(i: number, total: number): BubbleVariants["position"] {
   if (total === 1) return "solo";
@@ -215,20 +334,26 @@ function resolvePosition(i: number, total: number): BubbleVariants["position"] {
 function BubbleReplyPreview({
   replyPreview,
   side,
+  theme,
+  onClick,
 }: {
   replyPreview: NonNullable<Message["replyToPreview"]>;
   side: "sent" | "received";
+  theme: ThemeKey;
+  onClick?: () => void;
 }) {
   // A lighter tint of the bubble's own colour, so the quote reads as nested.
   const tint =
     side === "sent"
-      ? "bg-emerald-500/70 border-emerald-200/80"
+      ? BUBBLE_THEMES[theme].replyTint
       : "bg-gray-400/70 border-gray-200/80";
   return (
     <div
+      onClick={onClick}
       className={cn(
         "mb-1.5 max-w-[220px] rounded-md border-l-2 px-2 py-1",
         tint,
+        onClick && "cursor-pointer",
       )}
     >
       {replyPreview.senderName && (
@@ -253,15 +378,19 @@ function isOptimisticId(id: string) {
   return id.includes("-");
 }
 
-/** Count-chips shown under a bubble; tap to toggle your own reaction. */
-function MessageReactions({
+/**
+ * Committed reactions, rendered in normal flow below the bubble so they
+ * reserve vertical space (the next bubble shifts down), with a slight
+ * upward tuck against the bubble's bottom edge.
+ */
+function MessageReactionsRow({
   messageId,
-  side,
+  theme,
   currentUserId,
   onToggle,
 }: {
   messageId: string;
-  side: "sent" | "received";
+  theme: ThemeKey;
   currentUserId: string;
   onToggle: (emoji: string) => void;
 }) {
@@ -284,21 +413,21 @@ function MessageReactions({
   }
 
   return (
-    <div
-      className={cn(
-        "mt-1 flex flex-wrap gap-1",
-        side === "sent" ? "justify-end" : "justify-start",
-      )}
-    >
+    // In normal flow (not absolutely positioned), so the row takes real
+    // layout height and pushes the next bubble down — while the negative
+    // top margin tucks the chips against the bubble's bottom edge.
+    // self-start keeps them on the left for both sent and received.
+    <div className="z-10 -mt-1.5 flex w-fit flex-wrap gap-1 self-start pl-2">
       {[...grouped.entries()].map(([emoji, { count, mine }]) => (
         <button
           key={emoji}
           type="button"
           onClick={() => onToggle(emoji)}
+          aria-label={`${mine ? "Remove your" : "Add"} ${emoji} reaction`}
           className={cn(
-            "flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs leading-none transition-colors",
+            "flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs leading-none shadow-sm transition-colors",
             mine
-              ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+              ? BUBBLE_THEMES[theme].chipActive
               : "border-stone-200 bg-white text-stone-600 hover:bg-stone-50",
           )}
         >
@@ -310,12 +439,40 @@ function MessageReactions({
   );
 }
 
-/** Normal chat bubble */
+/** Icon shown next to bubbles that are replies; clicking jumps to the original. */
+function ReplyJumpButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Go to the replied message"
+      title="Go to the replied message"
+      className="flex size-6 shrink-0 items-center justify-center rounded-full text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-600"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+        <path d="M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1" />
+      </svg>
+    </button>
+  );
+}
+
+/** Normal chat bubble — shadcn Bubble surface + our positional radii on top */
 function ChatBubble({
   children,
   position,
   side,
-  theme = darkBubble,
+  theme,
   className,
   isRead,
   isEdited,
@@ -325,12 +482,13 @@ function ChatBubble({
   onReply,
   onEdit,
   onDelete,
+  onJumpToReply,
   messageId,
   currentUserId,
   onToggleReaction,
 }: {
   children: React.ReactNode;
-  theme?: BubbleTheme;
+  theme: ThemeKey;
   className?: string;
   isRead?: boolean;
   isEdited?: boolean;
@@ -340,6 +498,7 @@ function ChatBubble({
   onReply?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
+  onJumpToReply?: () => void;
   messageId: string;
   currentUserId: string;
   onToggleReaction?: (emoji: string) => void;
@@ -348,144 +507,188 @@ function ChatBubble({
   const showChecks = side === "sent" && isRead !== undefined;
   const bubbleSide = side ?? "sent";
   const canReact = Boolean(onToggleReaction);
-  // "Delete for me" is available on ANY message, so onDelete is no longer
-  // gated behind isOwn. Only editing stays sender-only.
   const hasActions =
     canReact || Boolean(onReply || onDelete || (isOwn && onEdit));
 
   return (
     <div
-      // Focusable so a tap on touch devices opens the action toolbar
-      // (which is shown via focus-within, not just hover).
-      tabIndex={0}
       className={cn(
-        "relative flex flex-col group/msg outline-none",
+        "relative flex w-full flex-col",
+        // Lift the active message above neighbouring rows so the toolbar
+        // and reaction chips paint on top of the next bubble, not under it.
+        "hover:z-20 focus-within:z-20",
         bubbleSide === "sent" ? "items-end" : "items-start",
       )}
     >
-      {/* Coloured message bubble */}
-      <div className={theme({ position, side, class: className })}>
-        {replyPreview && (
-          <BubbleReplyPreview replyPreview={replyPreview} side={bubbleSide} />
+      {/* Row so the reply-jump icon can sit beside the bubble */}
+      <div
+        className={cn(
+          "flex w-full items-center gap-1.5",
+          bubbleSide === "sent" ? "justify-end" : "justify-start",
+        )}
+      >
+        {bubbleSide === "sent" && onJumpToReply && (
+          <ReplyJumpButton onClick={onJumpToReply} />
         )}
 
-        <div
-          className={
-            showMeta ? "flex items-end gap-2.5" : "flex justify-center"
-          }
+        <Bubble
+          align={bubbleSide === "sent" ? "end" : "start"}
+          // The bubble itself is the hover zone for the toolbar, and
+          // focusable so a tap opens it on touch devices.
+          tabIndex={0}
+          className="group/msg relative max-w-[85%] outline-none sm:max-w-[75%]"
         >
-          <div className={showMeta ? "flex-1" : ""}>{children}</div>
+          <BubbleContent
+            className={cn(
+              "w-fit px-3 py-1 text-sm leading-relaxed shadow-sm break-words",
+              bubbleSide === "sent"
+                ? BUBBLE_THEMES[theme].bubble
+                : RECEIVED_BUBBLE,
+              bubbleRadii({ position, side: bubbleSide }),
+              className,
+            )}
+            // Inline style outranks the variant's own bg/text classes shipped
+            // inside the shadcn BubbleContent, which were overriding our
+            // utility classes depending on stylesheet order.
+            style={{
+              backgroundColor:
+                bubbleSide === "sent" ? BUBBLE_THEMES[theme].hex : RECEIVED_HEX,
+              color: "#ffffff",
+            }}
+          >
+            {replyPreview && (
+              <BubbleReplyPreview
+                replyPreview={replyPreview}
+                side={bubbleSide}
+                theme={theme}
+                onClick={onJumpToReply}
+              />
+            )}
 
-          {showMeta && (
-            <div className="shrink-0 flex items-end gap-1 text-[10px] text-white/60">
-              {isEdited && <span className="italic">edited</span>}
-              <span>{formatBubbleTime(timestamp)}</span>
-              {showChecks &&
-                (isRead ? (
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M18 6 7 17l-5-5" />
-                    <path d="m22 10-7.5 7.5L13 16" />
-                  </svg>
-                ) : (
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M20 6 9 17l-5-5" />
-                  </svg>
-                ))}
+            <div
+              className={
+                showMeta ? "flex items-end gap-2.5" : "flex justify-center"
+              }
+            >
+              <div className={showMeta ? "flex-1" : ""}>{children}</div>
+
+              {showMeta && (
+                <div className="shrink-0 flex items-end gap-1 text-[10px] text-white/60">
+                  {isEdited && <span className="italic">edited</span>}
+                  <span>{formatBubbleTime(timestamp)}</span>
+                  {showChecks &&
+                    (isRead ? (
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M18 6 7 17l-5-5" />
+                        <path d="m22 10-7.5 7.5L13 16" />
+                      </svg>
+                    ) : (
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M20 6 9 17l-5-5" />
+                      </svg>
+                    ))}
+                </div>
+              )}
+            </div>
+          </BubbleContent>
+
+          {/* Committed reactions, anchored to the bubble's bottom edge */}
+          {onToggleReaction && (
+            <MessageReactionsRow
+              messageId={messageId}
+              theme={theme}
+              currentUserId={currentUserId}
+              onToggle={onToggleReaction}
+            />
+          )}
+          {/* Hover / tap toolbar: quick reactions + actions */}
+          {hasActions && (
+            <div
+              className={cn(
+                // Small -my/py bridge keeps the pointer on the hover surface on
+                // its way down to the buttons, without blanketing the next bubble.
+                "absolute top-full z-50 flex -my-2 py-2 px-2",
+                "opacity-0 pointer-events-none transition-opacity duration-150",
+                "group-hover/msg:opacity-100 group-hover/msg:pointer-events-auto",
+                "focus-within:opacity-100 focus-within:pointer-events-auto",
+                bubbleSide === "sent" ? "right-1" : "left-1",
+              )}
+            >
+              <div className="flex translate-y-1 items-center gap-0.5 rounded-full border border-stone-200 bg-white p-1 shadow-sm transition-transform duration-150 group-hover/msg:translate-y-0">
+                {canReact &&
+                  QUICK_REACTIONS.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => onToggleReaction?.(emoji)}
+                      aria-label={`React with ${emoji}`}
+                      className="flex size-7 items-center justify-center rounded-full text-[15px] leading-none transition-transform hover:scale-110 hover:bg-stone-100 group-hover/msg:pointer-events-auto"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+
+                {canReact && (onReply || onDelete || (isOwn && onEdit)) && (
+                  <span className="mx-0.5 h-4 w-px shrink-0 bg-stone-200" />
+                )}
+
+                {onReply && (
+                  <BubbleAction label="Reply" onClick={onReply}>
+                    <IconReply />
+                  </BubbleAction>
+                )}
+                {isOwn && onEdit && (
+                  <BubbleAction label="Edit" onClick={onEdit}>
+                    <IconEdit />
+                  </BubbleAction>
+                )}
+                {onDelete && (
+                  <BubbleAction label="Delete for me" onClick={onDelete} danger>
+                    <IconDelete />
+                  </BubbleAction>
+                )}
+              </div>
             </div>
           )}
-        </div>
+        </Bubble>
+
+        {bubbleSide === "received" && onJumpToReply && (
+          <ReplyJumpButton onClick={onJumpToReply} />
+        )}
       </div>
-
-      {/* Committed reactions, shown under the bubble */}
-      {onToggleReaction && (
-        <MessageReactions
-          messageId={messageId}
-          side={bubbleSide}
-          currentUserId={currentUserId}
-          onToggle={onToggleReaction}
-        />
-      )}
-
-      {/* Hover toolbar: quick reactions + actions. top-full sits flush at the
-          unit's bottom edge; the pt-2 padding is a transparent "bridge" so the
-          pointer never leaves the hover surface on the way to the buttons. */}
-      {hasActions && (
-        <div
-          className={cn(
-            "absolute top-full z-50 flex -my-4 py-4 px-2",
-            "opacity-0 pointer-events-none transition-opacity duration-150",
-            "group-hover/msg:opacity-100 group-hover/msg:pointer-events-auto",
-            "focus-within:opacity-100 focus-within:pointer-events-auto",
-            bubbleSide === "sent" ? "right-1" : "left-1",
-          )}
-        >
-          <div className="flex translate-y-1 items-center gap-0.5 rounded-full border border-stone-200 bg-white p-1 shadow-sm transition-transform duration-150 group-hover/msg:translate-y-0">
-            {canReact &&
-              QUICK_REACTIONS.map((emoji) => (
-                <button
-                  key={emoji}
-                  type="button"
-                  onClick={() => onToggleReaction?.(emoji)}
-                  aria-label={`React with ${emoji}`}
-                  className="flex size-7 items-center justify-center rounded-full text-[15px] leading-none transition-transform hover:scale-110 hover:bg-stone-100 group-hover/msg:pointer-events-auto"
-                >
-                  {emoji}
-                </button>
-              ))}
-
-            {canReact && (onReply || onDelete || (isOwn && onEdit)) && (
-              <span className="mx-0.5 h-4 w-px shrink-0 bg-stone-200" />
-            )}
-
-            {onReply && (
-              <BubbleAction label="Reply" onClick={onReply}>
-                <IconReply />
-              </BubbleAction>
-            )}
-            {isOwn && onEdit && (
-              <BubbleAction label="Edit" onClick={onEdit}>
-                <IconEdit />
-              </BubbleAction>
-            )}
-            {onDelete && (
-              <BubbleAction label="Delete for me" onClick={onDelete} danger>
-                <IconDelete />
-              </BubbleAction>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-/** Placeholder shown in place of a message deleted for everyone */
+/** Placeholder shown in place of a deleted message — shadcn muted bubble */
 function DeletedBubble({ side }: { side: "sent" | "received" }) {
   return (
-    <div
-      className={`flex pointer-events-none ${side === "sent" ? "justify-end" : "justify-start"}`}
+    <Bubble
+      variant="muted"
+      align={side === "sent" ? "end" : "start"}
+      className="pointer-events-none w-full select-none"
     >
-      <div className="flex items-center gap-1.5 text-xs italic text-stone-400 border border-stone-200 rounded-2xl px-3 py-1.5 bg-stone-50 select-none">
+      <BubbleContent className="flex w-fit items-center gap-1.5 rounded-2xl border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs italic text-stone-400">
         <svg
           xmlns="http://www.w3.org/2000/svg"
           width="12"
@@ -501,8 +704,8 @@ function DeletedBubble({ side }: { side: "sent" | "received" }) {
           <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
         </svg>
         Message removed
-      </div>
-    </div>
+      </BubbleContent>
+    </Bubble>
   );
 }
 
@@ -513,12 +716,14 @@ function EditBubble({
   onSave,
   onCancel,
   side,
+  theme,
 }: {
   value: string;
   onChange: (v: string) => void;
   onSave: () => void;
   onCancel: () => void;
   side: "sent" | "received";
+  theme: ThemeKey;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -532,7 +737,9 @@ function EditBubble({
     <div
       className={`flex flex-col gap-1 ${side === "sent" ? "items-end" : "items-start"}`}
     >
-      <div className="rounded-2xl bg-emerald-600 px-3 py-2 w-64">
+      <div
+        className={cn("rounded-2xl px-3 py-2 w-64", BUBBLE_THEMES[theme].edit)}
+      >
         <textarea
           ref={ref}
           value={value}
@@ -559,7 +766,10 @@ function EditBubble({
           type="button"
           size="sm"
           onClick={onSave}
-          className="h-7 rounded-full bg-emerald-600 px-3 text-[11px] hover:bg-emerald-700"
+          className={cn(
+            "h-7 rounded-full px-3 text-[11px]",
+            BUBBLE_THEMES[theme].editButton,
+          )}
         >
           Save
         </Button>
@@ -673,8 +883,7 @@ function BubbleAction({
 function ChatGroup({
   group,
   currentUserId,
-  sentTheme = darkBubble,
-  receivedTheme = lightBubble,
+  theme,
   showSenderName = false,
   isMessageRead,
   onReply,
@@ -686,11 +895,13 @@ function ChatGroup({
   onEditInputChange,
   onSaveEdit,
   onCancelEdit,
+  messageToGroup,
+  flashGroupId,
+  onJumped,
 }: {
-  group: MessageGroup;
+  group: MessageGroupData;
   currentUserId: string;
-  sentTheme?: BubbleTheme;
-  receivedTheme?: BubbleTheme;
+  theme: ThemeKey;
   showSenderName?: boolean;
   isMessageRead: (ts: number) => boolean;
   onReply: (msg: Message) => void;
@@ -702,76 +913,140 @@ function ChatGroup({
   onEditInputChange: (v: string) => void;
   onSaveEdit: () => void;
   onCancelEdit: () => void;
+  messageToGroup: Map<string, string>;
+  flashGroupId: string | null;
+  onJumped: (groupId: string) => void;
 }) {
-  const { root, bubbles, label, divider } = chatGroupClasses({
-    side: group.side,
-  });
-  const theme = group.side === "sent" ? sentTheme : receivedTheme;
   const isOwn = group.senderId === currentUserId;
+  const align = group.side === "sent" ? "end" : "start";
+
+  // Inside MessageScrollerProvider, so the hooks are available here.
+  const { scrollToMessage } = useMessageScroller();
+  const { visibleMessageIds } = useMessageScrollerVisibility();
+
+  function jumpToMessage(targetId: string) {
+    // Scroller items are keyed by group id, so resolve the containing group.
+    const groupId = messageToGroup.get(targetId);
+    if (!groupId) return; // original was deleted/hidden — nothing to jump to
+
+    // Already on screen → just flash it in place, don't move the reader.
+    if (!visibleMessageIds.includes(groupId)) {
+      scrollToMessage(groupId);
+    }
+    onJumped(groupId);
+  }
 
   return (
     <>
       {group.showTimestamp && group.timestampLabel && (
-        <div className="flex justify-center my-2">
-          <div className={divider()}>{group.timestampLabel}</div>
+        <div className="flex justify-center my-4">
+          <div className="text-xs shadow-sm bg-yellow-100 rounded-full text-stone-800 text-center w-fit px-2 py-1 select-none">
+            {group.timestampLabel}
+          </div>
         </div>
       )}
 
-      <div className={root()}>
-        {showSenderName && group.senderName && group.side === "received" && (
-          <span className={label()}>{group.senderName}</span>
+      <MessageGroup
+        className={cn(
+          "gap-0.5 rounded-xl transition-colors duration-700",
+          // Extra breathing room for groups split by a time pause. When the
+          // pause is long enough to show the "x ago" divider, that divider's
+          // own my-4 already provides the spacing.
+          group.timeSeparated && !group.showTimestamp && "mt-3",
+          // Brief highlight after jumping here from a reply.
+          flashGroupId === group.id && "bg-amber-100/70",
         )}
-        <div className={bubbles()}>
-          {group.messages.map((msg, i) => {
-            // Deleted for everyone
-            if (msg.isDeleted) {
-              return <DeletedBubble key={msg.id} side={group.side} />;
-            }
-            // Being edited
-            if (editing?.id === msg.id) {
-              return (
-                <EditBubble
-                  key={msg.id}
-                  value={editInput}
-                  onChange={onEditInputChange}
-                  onSave={onSaveEdit}
-                  onCancel={onCancelEdit}
-                  side={group.side}
-                />
-              );
-            }
-            // Normal
-            const isLast = i === group.messages.length - 1;
+      >
+        {group.messages.map((msg, i) => {
+          // Deleted (for me, or for everyone)
+          if (msg.isDeleted) {
             return (
-              <ChatBubble
+              <MessageRow
                 key={msg.id}
-                position={resolvePosition(i, group.messages.length)}
-                side={group.side}
-                theme={theme}
-                timestamp={msg.timestamp}
-                isEdited={msg.isEdited}
-                replyPreview={msg.replyToPreview}
-                isOwn={isOwn}
-                onReply={() => onReply(msg)}
-                onEdit={() => onEdit(msg)}
-                onDelete={() => onDelete(msg)}
-                messageId={msg.id}
-                currentUserId={currentUserId}
-                onToggleReaction={(emoji) =>
-                  onToggleReaction(msg.id as Id<"messages">, emoji)
-                }
-                isRead={
-                  isLast && group.side === "sent"
-                    ? isMessageRead(msg.timestamp)
-                    : undefined
-                }
+                align={align}
+                className="relative hover:z-20 focus-within:z-20"
               >
-                {msg.content}
-              </ChatBubble>
+                <MessageContent className="w-full">
+                  <DeletedBubble side={group.side} />
+                </MessageContent>
+              </MessageRow>
             );
-          })}
-        </div>
-      </div>
+          }
+          // Being edited
+          if (editing?.id === msg.id) {
+            return (
+              <MessageRow
+                key={msg.id}
+                align={align}
+                className="relative hover:z-20 focus-within:z-20"
+              >
+                <MessageContent className="w-full">
+                  <EditBubble
+                    value={editInput}
+                    onChange={onEditInputChange}
+                    onSave={onSaveEdit}
+                    onCancel={onCancelEdit}
+                    side={group.side}
+                    theme={theme}
+                  />
+                </MessageContent>
+              </MessageRow>
+            );
+          }
+          // Normal
+          const isLast = i === group.messages.length - 1;
+          const showName =
+            showSenderName &&
+            i === 0 &&
+            group.side === "received" &&
+            Boolean(group.senderName);
+
+          return (
+            <MessageRow
+              key={msg.id}
+              align={align}
+              className="relative hover:z-20 focus-within:z-20"
+            >
+              <MessageContent className="w-full">
+                {showName && (
+                  <MessageHeader className="px-1 text-[11px] font-medium text-stone-400">
+                    {group.senderName}
+                  </MessageHeader>
+                )}
+                <ChatBubble
+                  position={resolvePosition(i, group.messages.length)}
+                  side={group.side}
+                  theme={theme}
+                  timestamp={msg.timestamp}
+                  isEdited={msg.isEdited}
+                  replyPreview={msg.replyToPreview}
+                  isOwn={isOwn}
+                  onReply={() => onReply(msg)}
+                  onEdit={() => onEdit(msg)}
+                  onDelete={() => onDelete(msg)}
+                  onJumpToReply={
+                    msg.replyToId
+                      ? () => jumpToMessage(msg.replyToId as string)
+                      : undefined
+                  }
+                  messageId={msg.id}
+                  currentUserId={currentUserId}
+                  onToggleReaction={(emoji) =>
+                    onToggleReaction(msg.id as Id<"messages">, emoji)
+                  }
+                  isRead={
+                    isLast && group.side === "sent"
+                      ? isMessageRead(msg.timestamp)
+                      : undefined
+                  }
+                >
+                  {msg.content}
+                </ChatBubble>
+              </MessageContent>
+            </MessageRow>
+          );
+        })}
+      </MessageGroup>
     </>
   );
 }
@@ -781,17 +1056,29 @@ function ChatGroup({
 function ReplyBar({
   replyingTo,
   currentUserId,
+  theme,
   onCancel,
 }: {
   replyingTo: ReplyingTo;
   currentUserId: string;
+  theme: ThemeKey;
   onCancel: () => void;
 }) {
   const isOwn = replyingTo.senderId === currentUserId;
   return (
     <div className="flex items-center gap-2 px-4 py-2 border-t border-stone-100 bg-stone-50/80">
-      <div className="border-l-2 border-emerald-500 pl-2 flex-1 min-w-0">
-        <p className="text-[11px] font-semibold text-emerald-600 mb-0.5">
+      <div
+        className={cn(
+          "border-l-2 pl-2 flex-1 min-w-0",
+          BUBBLE_THEMES[theme].accentBorder,
+        )}
+      >
+        <p
+          className={cn(
+            "text-[11px] font-semibold mb-0.5",
+            BUBBLE_THEMES[theme].accentText,
+          )}
+        >
           {isOwn
             ? "Replying to yourself"
             : `Replying to ${replyingTo.senderName}`}
@@ -829,9 +1116,13 @@ function ReplyBar({
 function ConversationPanel({
   conversationId,
   onBack,
+  theme,
+  onThemeChange,
 }: {
   conversationId: Id<"conversations">;
   onBack: () => void;
+  theme: ThemeKey;
+  onThemeChange: (t: ThemeKey) => void;
 }) {
   const currentUser = useQuery(api.users.currentUser);
   const conversationInfo = useQuery(api.conversations.getConversation, {
@@ -881,8 +1172,9 @@ function ConversationPanel({
 
   const editMessageMutation = useMutation(api.messages.editMessage);
 
-  // "Delete for me" with an optimistic update: the message disappears from
-  // MY list instantly. Nothing changes for the other participants.
+  // "Delete for me" with an optimistic update: the message shows the
+  // "Message removed" placeholder for ME instantly. Nothing changes for
+  // the other participants.
   const deleteMessageMutation = useMutation(
     api.messages.deleteMessageForMe,
   ).withOptimisticUpdate((localStore, args) => {
@@ -958,12 +1250,8 @@ function ConversationPanel({
   const [editInput, setEditInput] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Message | null>(null);
 
-  const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [rawMessages]);
   useEffect(() => {
     if (replyingTo) inputRef.current?.focus();
   }, [replyingTo]);
@@ -988,6 +1276,22 @@ function ConversationPanel({
 
   const groups = currentUser ? groupMessages(messages, currentUser._id) : [];
   const isGroup = groups.some((g) => g.side === "received" && g.senderName);
+
+  // Maps each message id to the id of its group (which is what the
+  // scroller's items are keyed by), for reply-jump navigation.
+  const messageToGroup = new Map<string, string>();
+  for (const g of groups) {
+    for (const m of g.messages) messageToGroup.set(m.id, g.id);
+  }
+
+  // Briefly highlight the group we jumped to.
+  const [flashGroupId, setFlashGroupId] = useState<string | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function handleJumped(groupId: string) {
+    setFlashGroupId(groupId);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashGroupId(null), 1600);
+  }
 
   // ── Reply ──
   function handleReply(msg: Message) {
@@ -1109,19 +1413,25 @@ function ConversationPanel({
             {conversationInfo?.name?.[0]?.toUpperCase() ?? "?"}
           </div>
         )}
-        <span className="ml-1.5 truncate text-sm font-semibold text-stone-800">
+        <span className="ml-1.5 min-w-0 flex-1 truncate text-sm font-semibold text-stone-800">
           {conversationInfo?.name ?? ""}
         </span>
+        <ThemePicker theme={theme} onChange={onThemeChange} />
       </div>
 
-      {/* Messages */}
-      <div className="relative z-10 flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-1">
+      {/* Desktop theme picker, floating in the top-right of the panel */}
+      <div className="absolute right-3 top-3 z-30 hidden md:block">
+        <ThemePicker theme={theme} onChange={onThemeChange} />
+      </div>
+
+      {/* Messages — shadcn MessageScroller owns the scroll behavior */}
+      <div className="relative z-10 flex-1 min-h-0">
         {rawMessages === undefined ? (
-          <div className="flex items-center justify-center flex-1 text-stone-400 text-sm">
+          <div className="flex h-full items-center justify-center text-stone-400 text-sm">
             Loading…
           </div>
         ) : groups.length === 0 ? (
-          <div className="flex flex-col items-center justify-center flex-1 gap-2 text-stone-400">
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-stone-400">
             <svg
               xmlns="http://www.w3.org/2000/svg"
               width="24"
@@ -1138,28 +1448,49 @@ function ConversationPanel({
             <p className="text-sm">No messages yet. Say hi!</p>
           </div>
         ) : (
-          groups.map((group) => (
-            <ChatGroup
-              key={group.id}
-              group={group}
-              currentUserId={currentUser?._id ?? ""}
-              showSenderName={isGroup}
-              isMessageRead={isMessageRead}
-              onReply={handleReply}
-              onEdit={handleEdit}
-              onDelete={handleDelete}
-              onToggleReaction={(messageId, emoji) =>
-                toggleReaction({ messageId, emoji })
-              }
-              editing={editing}
-              editInput={editInput}
-              onEditInputChange={setEditInput}
-              onSaveEdit={handleSaveEdit}
-              onCancelEdit={handleCancelEdit}
-            />
-          ))
+          <MessageScrollerProvider autoScroll defaultScrollPosition="end">
+            <MessageScroller className="h-full">
+              <MessageScrollerViewport className="px-4 py-4">
+                <MessageScrollerContent className="flex flex-col gap-1">
+                  {groups.map((group) => (
+                    <MessageScrollerItem
+                      key={group.id}
+                      messageId={group.id}
+                      // The styled item ships content-visibility/containment
+                      // for perf, but paint containment clips our hover
+                      // toolbar and the overlapping reaction chips. Disable
+                      // it so floating UI can escape the row's box.
+                      className="relative overflow-visible [contain:none] [content-visibility:visible] hover:z-30 focus-within:z-30"
+                    >
+                      <ChatGroup
+                        group={group}
+                        currentUserId={currentUser?._id ?? ""}
+                        theme={theme}
+                        showSenderName={isGroup}
+                        isMessageRead={isMessageRead}
+                        onReply={handleReply}
+                        onEdit={handleEdit}
+                        onDelete={handleDelete}
+                        onToggleReaction={(messageId, emoji) =>
+                          toggleReaction({ messageId, emoji })
+                        }
+                        editing={editing}
+                        editInput={editInput}
+                        onEditInputChange={setEditInput}
+                        onSaveEdit={handleSaveEdit}
+                        onCancelEdit={handleCancelEdit}
+                        messageToGroup={messageToGroup}
+                        flashGroupId={flashGroupId}
+                        onJumped={handleJumped}
+                      />
+                    </MessageScrollerItem>
+                  ))}
+                </MessageScrollerContent>
+              </MessageScrollerViewport>
+              <MessageScrollerButton />
+            </MessageScroller>
+          </MessageScrollerProvider>
         )}
-        <div ref={bottomRef} />
       </div>
 
       {/* Typing indicator */}
@@ -1205,6 +1536,7 @@ function ConversationPanel({
               <ReplyBar
                 replyingTo={replyingTo}
                 currentUserId={currentUser?._id ?? ""}
+                theme={theme}
                 onCancel={() => setReplyingTo(null)}
               />
             </motion.div>
@@ -1289,6 +1621,23 @@ export default function ConversationContainer() {
     Id<"conversations"> | undefined
   >();
 
+  const [theme, setTheme] = useState<ThemeKey>(() => {
+    try {
+      const saved = localStorage.getItem("bubble-theme");
+      if (saved && saved in BUBBLE_THEMES) return saved as ThemeKey;
+    } catch {
+      // localStorage unavailable (private mode, SSR) — fall through
+    }
+    return "emerald";
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("bubble-theme", theme);
+    } catch {
+      // best effort only
+    }
+  }, [theme]);
+
   return (
     // h-dvh instead of h-screen: tracks the real visible height on mobile
     // browsers, where the URL bar collapses/expands.
@@ -1338,6 +1687,8 @@ export default function ConversationContainer() {
             key={selectedId}
             conversationId={selectedId}
             onBack={() => setSelectedId(undefined)}
+            theme={theme}
+            onThemeChange={setTheme}
           />
         ) : (
           <div className="flex flex-col items-center justify-center flex-1 gap-3 text-stone-400">
